@@ -10,10 +10,10 @@
 #    Please note: None of the conditions outlined in the disclaimer above will supersede the terms and conditions contained 
 #    within the Premier Customer Services Description.
 
-#Registra o inicio da execução dos script
-Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "############ Script Iniciado ############"
+#Log the start of script execution
+Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "############ Script Started ############"
 
-#Importa os módulos
+#Module import
 try{
     Import-Module ActiveDirectory -ErrorAction Stop
     Import-Module MSOnline -ErrorAction Stop
@@ -24,19 +24,19 @@ catch{
     Exit
 }
 
-#Inicia o timer para calculo do tempo de execução
+#Get current date/time to start measure the duration of execution
 $startTimer = Get-Date
 
-#Nome do arquivo de licenciamento
+#Path to licensing config file
 $licenseFilePath = ".\Licenses.csv"
 
-#Importa o módulo com os parametros de licenciamento
+#Imports the licensing config file
 $licenseConfigFile = Import-Csv -Path $licenseFilePath -Delimiter ","
 
-#Configura o nome do logFile do modulo de licenciamento
+#Format of the license module log file
 $licenseModuleLogFileName = "LicenseModule_$((Get-Date).ToString('ddMMyyyy')).log"
 
-#Função de gravação de log
+#Creates a function to log scripting actions
 Function Write-Log(){
     param
         (
@@ -45,207 +45,224 @@ Function Write-Log(){
             [string]$Message
         )
 
-    #Nome do arquivo de log contendo a data/hora
+    #Name of the log file containing date/time
     $logFileName = "ManageO365Licenses_$((Get-Date).ToString('ddMMyyyy')).log"
 
-    #Header do arquivo no formato csv
+    #Header of the log file in csv format
     $header = "datetime,user,action,message"
 
-    #Data/hora da entrada no log
+    #Date/time of the log entry
     $datetime = (Get-Date).ToString('dd/MM/yyyy hh:mm:ss')
 
-    #Entrada do arquivo de log no formato csv
+    #Log entry variable containing each parameter passed when funcion is called
     $logEntry = "$datetime,$LogLevel,$UserOrGroup,$Message"
 
-    #Se o arquivo não existir, cria o arquivo e adiciona a primeira linha como header
+    #Check if log file already exists
     if(-not(Test-Path $logFileName)){
+        #Try to create a file and add content
         try{
             New-Item -Path $logFileName -ErrorAction Stop
             Add-Content -Path $logFileName -Value $header -ErrorAction Stop
         }
         catch{
+            #Prints the exception related to log file creation/write
             $_.Exception.Message
-            #Finaliza a exeução do script
             Exit
         }
     }
-    #Adiciona a entrada no arquivo de log
-    
+
+    #Adds a log entry into log file    
     try{
         Add-Content -Path $logFileName -Value $logEntry -ErrorAction Stop
     }
     catch{
         $_.Exception.Message
-        #Finaliza a execução do script
+        #Prints the exception related to log file creation/write
         Exit
     }
     
 }
 
-#Função para coleta das credenciais em disco
+#Function to get o365/msoline services credentials from a file
 Function GetCredentialOnDisk{
 
     try{
-        #Usuário que será usado para se conectar no MSOnline Services
+        #User with privileges to manage licensing
         $username = "admin@foggioncloud.onmicrosoft.com"
-        #Obtem a senha do arquivo em disco
+        #Get password from the file
         $password = Get-Content .\cred.sec -ErrorAction Stop | ConvertTo-SecureString -ErrorAction Stop
 
-        #Monta o objeto da credencial
+        #Creates a PSCredential object
         $credential = new-object -typename System.Management.Automation.PSCredential -argumentlist $username,$password -ErrorAction Stop
 
-        Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "Credenciais de conexão obtidas. Usuário $($username) usado para a conexão"
+        #Write a log entry
+        Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "Credentials to connect to MSOnline Services acquired. User $($username) has been used to connect"
+        
+        #Returns the PSCredential object
         return $credential
     }
     catch{
+        #Write the exception related to either get password from file or create a PSCredential object
         Write-Log -LogLevel Error -UserOrGroup "SCRIPT" -Message $_.Exception.Message
     }
 }
 
-#Função de conexão no Microsoft Online Services
+#Function to connect to MSOnline Services
 Function ConnectMsolService{
+    #Try to connect
     try{
-        Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "Importando o módulo MSOnline"
+        Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "Import MSOnline module"
+        #Import Module MSOnline Services
         Import-Module MSOnline -ErrorAction Stop
-        Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "Efetuando a conexão no Microsoft Online Services"
+        Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "Connecting to Microsoft Online Services"
+        #Start the connection cmdlet
         Connect-MsolService -Credential (GetCredentialOnDisk) -ErrorAction Stop
+        Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "Connected to Microsoft Online Services"
     }
     catch{
         Write-Log -LogLevel Error -UserOrGroup "SCRIPT" -Message $_.Exception.Message
         
-        #Finaliza o timer para calculo do tempo de execucão
+        #Get current date/time to calculates the execution time span before finishing script execution
         $stopTimer = Get-Date
 
-        #Registra o termino do script com o tempo de execução
-        Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "############ Script Finalizado. Tempo de execução: $((New-TimeSpan -Start $startTimer -End $stopTimer).ToString("dd\.hh\:mm\:ss")) ############"
+        #Add a log entry registering script stop and execution time span
+        Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "############ Script Stopped. Execution Time: $((New-TimeSpan -Start $startTimer -End $stopTimer).ToString("dd\.hh\:mm\:ss")) ############"
         
-        #Finaliza a exeução do script
+        #Exits current PowerShell session due to an issue to connect to MSOnline Services
         Exit
     }
 }
 
-#Função que monitora a entrada e saída de membros de um grupo
+#Function to monitor group membership
 Function GroupMonitor{
     
     param(
         $GroupName
     )
     
+    #Making sure sensitive variables are clean
     $currentMembers = $null
     $compareMembers = $null
 
-    #Obtem membros do grupo e salva um novo arquivo
-    Write-Log -LogLevel "Info" -UserOrGroup $groupName -Message "Iniciando a listagem de membros do grupo"
+    #Get group membership and saves to a file
+    Write-Log -LogLevel "Info" -UserOrGroup $groupName -Message "Starting group membership acquisition"
+    
+    #Try to get a list of group members to save it in a reference file
     try{
-        #Obtem a lista de membros atuais
         $currentMembers = Get-ADGroup -Identity $groupName -Properties Members -ErrorAction Stop | Select-Object -ExpandProperty Members | Get-ADUser -ErrorAction Stop
-        Write-Log -LogLevel "Info" -UserOrGroup $groupName "Membros do grupo listados com sucesso"
+        Write-Log -LogLevel "Info" -UserOrGroup $groupName "Group members acquired succesfully"
 
-        #Se a quantidade de membros for maior do que 0
+        #If group count is greater than 0/not empty
         if(($currentMembers|Measure-Object).Count -gt 0){
             try{
-                #Grava uma variável com nome do arquivo contendo data/hora
-                $logFileName =  "$($groupName)_Membros_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
-                #Exporta para um arquivo .csv
+                #Creates a variable with the name of the reference file containing date/time
+                $logFileName =  "$($groupName)_Members_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
+                #Export group membership to a csv file
                 $currentMembers | Export-Csv "$($logFileName)" -NoTypeInformation -ErrorAction Stop
-                Write-Log -LogLevel "Error" -UserOrGroup $groupName "Membros do grupo salvos no arquivo csv $($logFileName)"
+                Write-Log -LogLevel "Error" -UserOrGroup $groupName "Group membership list saved in csv file $($logFileName)"
             }
             catch{
+                #Writes a log entry with the error related to export membership to a csv file
                 Write-Log -LogLevel "Error" -UserOrGroup $groupName $_.Exception.Message
             }
         }
-        #Se a quantidade de membros for menor do que 1
+        #If group count is zero
         else{
-            Write-Log -LogLevel "Error" -UserOrGroup $groupName "Nenhum membro encontrado no grupo"
+            Write-Log -LogLevel "Error" -UserOrGroup $groupName "Group $($groupName) is empty"
         }
     }
     catch{
+        #Writes a log entry with the error related to get AD group membership
         Write-Log -LogLevel "Error" -UserOrGroup $groupName $_.Exception.Message
     }
 
-    #Grava uma variavel com o nome do arquivo de log
-    $logFileName = "$($groupName)_MembrosAdicionadosRemovidos_ddMMyyyy_hhmmss.csv"
+    #Creates a variable containing the log file name related to group membership changes
+    $logFileName = "$($groupName)_MembersAddedRemoved_ddMMyyyy_hhmmss.csv"
 
-    #Se a quantidade de arquivos de membros for maior do que 1
-    If((Get-Item "$($groupName)_Membros_*" |Measure-Object).Count -gt 1){
-        #Compara os membros atuais no novo arquivo com a lista criada na última execução
+    #If csv membership file count in disk is greater than 1
+    If((Get-Item "$($groupName)_Members_*" |Measure-Object).Count -gt 1){
         try{
-            #Efetua a comparação dos membros do grupo usando os dois arquivos mais recentes, sendo o ultima da execução atual e o penultimo da execução anterior
-            $compareMembers = Compare-Object -DifferenceObject (Import-Csv (Get-Item "$($groupName)_Membros_*" | Sort-Object LastWriteTime -Descending | Select-Object -First 1)) -ReferenceObject (Import-Csv (Get-Item "$($groupName)_Membros_*" | Sort-Object LastWriteTime -Descending | Select-Object -Skip 1 -First 1)) -PassThru -Property Name -ErrorAction Stop
-            Write-Log -LogLevel "Info" -UserOrGroup $groupName -Message "Comparação de usuários adicionados ou removidos efetuada com sucesso. Lista de usuários presente no arquivo $($logFileName)"
+            #Compares the current group membership with the previous execution membership which has been saved in a csv file
+            $compareMembers = Compare-Object -DifferenceObject (Import-Csv (Get-Item "$($groupName)_Members_*" | Sort-Object LastWriteTime -Descending | Select-Object -First 1)) -ReferenceObject (Import-Csv (Get-Item "$($groupName)_Members_*" | Sort-Object LastWriteTime -Descending | Select-Object -Skip 1 -First 1)) -PassThru -Property Name -ErrorAction Stop
+            Write-Log -LogLevel "Info" -UserOrGroup $groupName -Message "Group membership comparison ran succesfully. Users added/removed saved into file $($logFileName)"
         }
         catch{
             Write-Log -LogLevel "Error" -UserOrGroup $groupName -Message $_.Exception.Message
         }
     }
-    #Se a quantidade de arquivos de membros for menor ou igual à 1, entra em modo de primeira execução
+    #If csv membership file count in disk is equal or less than 1, starts "first execution mode"
     else{
-        Write-Log -LogLevel Error -UserOrGroup $groupName -Message "Não é possivel efetuar a comparação. Primeira execução ou arquivos com a lista de membros faltando. Se for a primeira execução, todos os usuários do grupo receberão a licença"
+        Write-Log -LogLevel Error -UserOrGroup $groupName -Message "Unable to compare current list and previous one. Script in 'First Execution Mode' or the file with group membership is missing. If in 'First Exeuction Mode', all users in the group will receive the license"
 
-        #Se a quantidade de itens resultantes da comparação de membros for maior do que 0
+        #If the current members count is greater than 0
         if(($currentMembers|Measure-Object).Count -gt 0){
 
-            #Adiciona a coluna que indica que o membro é novo no grupo para todos os membros, pois o script entrou em modo de primeira execução
+            #Once this is in "first execution mode", adds a column to each object in current member array with "Added Member" signal
             $currentMembers | Add-Member -Name "SideIndicator" -MemberType NoteProperty -Value "=>" -Force
             
-            #Exporta uma lista contendo os membros que foram adicionados ou removidos do grupo
+            #Exports a list containing all members that have been either added or removed to/from the AD group
             try{
                 $currentMembers | Export-Csv "$($logFIleName)" -NoTypeInformation -ErrorAction Stop
-                Write-Log -LogLevel "Info" -UserOrGroup $groupName -Message "Lista de membros adicionados e removidos do grupo exportada com sucesso para o arquivo $($logFileName)"
+                Write-Log -LogLevel "Info" -UserOrGroup $groupName -Message "Group membership activity sucessfully exported to log file $($logFileName)"
             }
             catch{
+                #Writes a log entry with the error related to csv export
                 Write-Log -LogLevel "Error" -UserOrGroup $groupName -Message $_.Exception.Message
             }
 
-            #Retorna a lista atual de membros como o resultado da comparação, pois o script entrou em modo de primeira execução
+            #Returns the current membership list as a result of the compare cmdlet because it is in "first execution mode"
             return $currentMembers
         }
-        #Se a quantidade de itens resultantes da comparação de membros for igual a 0
+        #If the current members count is equal to zero
         else
-        {
-            Write-Log -LogLevel "Error" -UserOrGroup $groupName -Message "Não foi possivel obter os membros atuais do grupo"
+        {   
+            #Writes a log entry with a static string error sentence that it is unable to list current members
+            Write-Log -LogLevel "Error" -UserOrGroup $groupName -Message "Unable to get group current membership"
         }
     }
 
-    #Se a quantidadede itens resultantes da comparação de membros for maior do que 0 (agora fora do modo de primeira execução)
+    #If the array with add/removed members is greater than 0/not empty (now it is not in "first execution mode")
     if(($compareMembers|Measure-Object).Count -gt 0){
-            Write-Log -LogLevel "Info" -UserOrGroup $group -Message "Alterações detectadas. Membros adicionados: $(($compareMembers|Where-Object{$_.SideIndicator -eq "=>"}|Measure-Object).Count) - Membros removidos: $(($compareMembers|Where-Object{$_.SideIndicator -eq "<="}|Measure-Object).Count)"
+            Write-Log -LogLevel "Info" -UserOrGroup $group -Message "Group membership change detected. Members added: $(($compareMembers|Where-Object{$_.SideIndicator -eq "=>"}|Measure-Object).Count) - Members removed: $(($compareMembers|Where-Object{$_.SideIndicator -eq "<="}|Measure-Object).Count)"
             
-            #Exporta uma lista contendo os membros que foram adicionados ou removidos do grupo
+            #Exports a list containing all members that have been either added or removed to/from the AD group
             try{
                 $compareMembers | Export-Csv "$($logFIleName)" -NoTypeInformation -ErrorAction Stop
-                Write-Log -LogLevel "Info" -UserOrGroup $groupName -Message "Lista de membros adicionados e removidos do grupo exportada com sucesso para o arquivo $($logFIleName)"
+                Write-Log -LogLevel "Info" -UserOrGroup $groupName -Message "Group membership activity exporeted to log file $($logFIleName)"
             }
             catch{
+                #Writes a log entry with the error related to csv export
                 Write-Log -LogLevel "Error" -UserOrGroup $groupName -Message $_.Exception.Message
             }
 
-            #Cria uma array para conter os objetos de usuários do AD. Não é feito o retorno do objeto de comparação diretamente devido à problemas na leitura de objetos dentro de objetos
+            #Created an array object to receive AD user objects. This function cannot return the objects resulted from Compare-Object due to issues in reading the objects that have other objects inside
             $arrCompareMembers = @()
 
-            #Para cada objeto dentro da matriz de comparação de membros
+            #For each compared object
             foreach($userMember in $compareMembers){
-                #Obtem o objeto do usuário no AD
+                
+                #Get the respective AD User object using its DN
                 $user = Get-ADUser -Identity $userMember.DistinguishedName
 
-                #Se o objeto contem o indicador de membro adicionado, adiciona uma coluna ao objeto usuário com o indicador
+                #If the object has the signal added "=>" adds the respective signal string to the AD User object in a new column
                 if($userMember.SideIndicator -eq "=>"){
                     $user | Add-Member -Name SideIndicator -MemberType NoteProperty -Value "=>" -Force
                 }
-                #Se o objeto contem o indicador de membro removido, adiciona uma coluna ao objeto usuário com o indicador
+
+                #If the object has the signal removed "=>" the respective signal string to the AD User object in a new column
                 if($userMember.SideIndicator -eq "<="){
                     $user | Add-Member -Name SideIndicator -MemberType NoteProperty -Value "<=" -Force
                 }
-                #Adiciona o objeto do usuário do AD na array resultante
+                #Adds the AD user object to the array that's going to be returned
                 $arrCompareMembers += $user
             }
 
-            #Retorna a lista comparativa de membros
+            #Return the final list of members that have been either added or removed            
             return $arrCompareMembers
      }
 }
 
-#Função que monitora o arquivo de licenças
+#Function to monitor the license config file
 Function LicensePlansMonitor{
     
     Param(
@@ -253,95 +270,97 @@ Function LicensePlansMonitor{
         $Group
     )
 
-    #Cria uma array para retorno do resultado da função
+    #Creates an rray to return the result of the comparison
     $arrLicenseChangeResult = @()
 
-    #Para cada licença no arquivo csv de configuração de licenças
+    #For each license in license config file
     foreach($license in $LicenseFile|Where-Object{$_.Group -eq $Group}){
     
-        #Limpa a variável de comparação para evitar sujeira
+        #Making sure comparison variable is clean
         $comparePlans = $null
 
-        #Cria o sufixo do nome do arquivo, trocando : por - para evitar problemas na criação do arquivo (caractere : no path do arquivo indicaria drive inexistente)
+        #Creates a sufix name for the file that's going to be used to register current SKU configuration replacing : to - in order to avoid issues due to file path reserved character
         $plansCompareFileSufix = "$($license.Group)_$(($license.SKU).Replace(":","-"))"
         
-        #Obtem planos da licença atual
-        Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "Iniciando a listagem de planos da configuração de liçenca $($license.SKU)"
+        #Following line is under review and currently not being used
         #$currentPlans = ListPlans -Plans $license.Plans
-        Write-Log -LogLevel "Info" -UserOrGroup $license.SKU "Planos do grupo listados: $($license.Plans)"
+        Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "Starting to list license plans in the license configuration file for SKU $($license.SKU)"
+        Write-Log -LogLevel "Info" -UserOrGroup $license.SKU "Plans of the group $($Group) successfully listed: $($license.Plans)"
 
-        #Se a coluna Plans da licença não estiver vazia
+        #If Plans column for the current license is not null
         if(![string]::IsNullOrEmpty($license.Plans)){
 
-            #Armazena o nome do arquivo com a lista de planos
-            $plansFileName = "$($plansCompareFileSufix)_Planos_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
+            #Creates a variable with the current execution license plans comparison file
+            $plansFileName = "$($plansCompareFileSufix)_Plans_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
             try{
-                #Cria uma array resultante
+                #Created an array to be returned by this function
                 $arrPlans = @()
-                #Para cada plano na coluna, separados por ;
+                #For each plan in Plans column (semi-comman separated)
                 foreach($plan in ($license.Plans.Split(";"))){
-                    #Cria um objeto ps custom e adiciona as colunas para listar os planos por linha no arquivo de planos
+                    #Creates a new PSObject with its columns in order to list each plan by line in plans comparison file
                     $objPlans = New-Object psobject
                     $objPlans | Add-Member -Name "Group" -MemberType NoteProperty -Value $license.Group
                     $objPlans | Add-Member -Name "SKU" -MemberType NoteProperty -Value $license.SKU
                     $objPlans | Add-Member -Name "Plan" -MemberType NoteProperty -Value $plan
-                    #Acumula a variável resultante
+                    #Increments the resulting array
                     $arrPlans += $objPlans
                 }
                 
-                #Exporta a lista de planos da licença em um arquivo csv
+                #Exports a list with all plans to a csv file
                 $arrPlans | Export-Csv $plansFileName -NoTypeInformation -ErrorAction Stop
-                Write-Log -LogLevel Info -UserOrGroup $license.SKU "Planos da SKU salvos no arquivo csv $($plansFileName)"
+                Write-Log -LogLevel Info -UserOrGroup $license.SKU "PLans of the SKU $($SKU) saved in csv file $($plansFileName)"
             }
             catch{
                 Write-Log -LogLevel Error -UserOrGroup $license.SKU $_.Exception.Message
-            }
+            }   
         }
-        #Se a coluna Plans da licença estiver vazia (gravação de um objeto com coluna vazia em separado para tratamento de erro separado)
+        #If the Plans column is empty (For now, I've decided to treat empty PLans columns objects in a dedicated statement in order to have an specfic error treatment)
         else{
-            #Armazena o nome do arquivo com a lista de planos
-            $plansFileName = "$($plansCompareFileSufix)_Planos_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
+            #Creates a new PSObject with its columns in order to list each plan by line in plans comparison file
+            $plansFileName = "$($plansCompareFileSufix)_Plans_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
             try{
-                #Cria um objeto ps custom com a coluna plan vazia
+                #Creates a new PSObject with its columns with the empty column
                 $objPlans = New-Object psobject
                 $objPlans | Add-Member -Name "Group" -MemberType NoteProperty -Value $license.Group
                 $objPlans | Add-Member -Name "SKU" -MemberType NoteProperty -Value $license.SKU
                 $objPlans | Add-Member -Name "Plan" -MemberType NoteProperty -Value $null
                 $objPlans | Export-Csv $plansFileName -NoTypeInformation -ErrorAction Stop
-                Write-Log -LogLevel Error -UserOrGroup $groupName "Nenhum plano encontrado na SKU $($license.SKU)"
+                Write-Log -LogLevel Error -UserOrGroup $groupName "No plans found in SKU $($license.SKU)"
             }
             catch{
                 Write-Log -LogLevel Error -UserOrGroup $license.SKU $_.Exception.Message
             }
         }
 
-        #Se a quantidade de arquivos de planos da licença for maior do que 1
-        If((Get-Item "$($plansCompareFileSufix)_Planos_*" |Measure-Object).Count -gt 1){
-            #Armazena o nome do arquivo com a lista de planos
-            $plansCompareFileName = "$($plansCompareFileSufix)_PlanosAdicionadosRemovidos_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
-            #Compara os planos atuais no novo arquivo com a lista criada na última execução
+        #If the license plan comparison files in disk is greater than 1
+        If((Get-Item "$($plansCompareFileSufix)_Plans_*" |Measure-Object).Count -gt 1){
+            #Creates a variable with the name of the plans comparison result file for this execution
+            $plansCompareFileName = "$($plansCompareFileSufix)_PlansAddedRemoved_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
+            #Compares current plans in the file from last execution with the list from current execution
             try{
-                #$lastRunPlan = ListPlans -Plans (Import-Csv (Get-Item "$($plansCompareFileSufix)_Planos_*" | Sort-Object LastWriteTime -Descending | Select-Object -Skip 1 -First 1)).Plans
-                $comparePlans = Compare-Object -DifferenceObject (Import-Csv (Get-Item "$($plansCompareFileSufix)_Planos_*" | Sort-Object LastWriteTime -Descending | Select-Object -First 1)) -ReferenceObject (Import-Csv (Get-Item "$($plansCompareFileSufix)_Planos_*" | Sort-Object LastWriteTime -Descending | Select-Object -Skip 1 -First 1)) -PassThru -Property Plan -ErrorAction Stop
-                Write-Log -LogLevel Info -UserOrGroup $license.SKU -Message "Comparação de planos adicionados ou removidos efetuada com sucesso. Lista de planos presente no arquivo $($plansCompareFileName)"
+                #Line 341 below is a previous way to compare that produced some inconsistent issues. 342 will be used till we cannot confirm it is the best way
+                #$lastRunPlan = ListPlans -Plans (Import-Csv (Get-Item "$($plansCompareFileSufix)_Plans_*" | Sort-Object LastWriteTime -Descending | Select-Object -Skip 1 -First 1)).Plans
+                $comparePlans = Compare-Object -DifferenceObject (Import-Csv (Get-Item "$($plansCompareFileSufix)_Plans_*" | Sort-Object LastWriteTime -Descending | Select-Object -First 1)) -ReferenceObject (Import-Csv (Get-Item "$($plansCompareFileSufix)_Plans_*" | Sort-Object LastWriteTime -Descending | Select-Object -Skip 1 -First 1)) -PassThru -Property Plan -ErrorAction Stop
+                Write-Log -LogLevel Info -UserOrGroup $license.SKU -Message "Plan configuration change detected succesfully. List of plans exported into log file $($plansCompareFileName)"
             }
             catch{
                 Write-Log -LogLevel "Error" -UserOrGroup $license.SKU -Message $_.Exception.Message
             }
         }
-        #Se a quantidade de arquivos de planos da licença for igual ou menor à 1
+        #
+        #If the license plan comparison files in disk is greater than 1
         else{
-            #Armazena o nome do arquivo com a lista de planos
-            $plansCompareFileName = "$($plansCompareFileSufix)_PlanosAdicionadosRemovidos_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
-            Write-Log -LogLevel Error -UserOrGroup $license.SKU -Message "Não é possivel efetuar a comparação. Primeira execução ou arquivos com a lista de planos faltando. Se for a primeira execução, todos os usuários do grupo receberão a licença"
+            #Creates a variable with the name of the plans comparison result file for this execution
+            $plansCompareFileName = "$($plansCompareFileSufix)_PlansAddedRemoved_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
+            Write-Log -LogLevel Error -UserOrGroup $license.SKU -Message "Unable to compares license plan. Script in 'First Execution Mode' ou files with plans configuration not found. If in 'First Exeuction Mode', all users in the group will receive the license"
 
-            #Se a coluna Plans da licença não estiver vazia
+            #If Plans column of the current license is not empty
             if(![string]::IsNullOrEmpty($license.Plans)){
         
-                #Cria uma array resultante
+                #Created an array to be returned by this function
                 $arrPlans = @()
                 foreach($plan in ($license.Plans.Split(";"))){
-                    #Cria um objeto ps custom com a coluna plan vazia
+                    #Creates a new PSObject with its columns with the empty column
                     $objPlans = New-Object psobject
                     $objPlans | Add-Member -Name "Group" -MemberType NoteProperty -Value $license.Group
                     $objPlans | Add-Member -Name "SKU" -MemberType NoteProperty -Value $license.SKU
@@ -350,31 +369,31 @@ Function LicensePlansMonitor{
                     $arrPlans += $objPlans
                 }
                 
-                #Exporta uma lista contendo os planos que foram adicionados ou removidos do grupo
+                #Exports a list with the plans that have been either added or removed from the license config file
                 try{
                     $arrPlans | Where-Object{$_.Plan -ne ""} | Export-Csv $plansCompareFileName -NoTypeInformation -ErrorAction Stop
-                    Write-Log -LogLevel "Info" -UserOrGroup $license.SKU -Message "Lista de membros adicionados e removidos do grupo exportada com sucesso para o arquivo $($plansCompareFileName)"
+                    Write-Log -LogLevel "Info" -UserOrGroup $license.SKU -Message "Group membership activity sucessfully exported to log file $($plansCompareFileName)"
                 }
                 catch{
                     Write-Log -LogLevel "Error" -UserOrGroup $license.SKU -Message $_.Exception.Message
                 }
-                #Acumula a matriz resultante
+                #Increments the resultant array
                 $arrLicenseChangeResult += $arrPlans
             }
-            #Se a coluna Plans da licença estiver vazia (gravação de um objeto com coluna vazia em separado para tratamento de erro separado)
+            #If the Plans column is empty (For now, I've decided to treat empty Plans columns objects in a dedicated statement in order to have an specfic error treatment)
             else
             {
-                #Armazena o nome do arquivo com a lista de planos
-                $plansCompareFileName = "$($plansCompareFileSufix)_Planos_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
+                #Creates a variable with the current execution license plans comparison file
+                $plansCompareFileName = "$($plansCompareFileSufix)_Plans_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
 
                 try{
-                    #Cria um objeto ps custom com a coluna plan vazia
+                    #Creates a new PSObject with its columns with the empty column
                     $objPlans = New-Object psobject
                     $objPlans | Add-Member -Name "Group" -MemberType NoteProperty -Value $license.Group
                     $objPlans | Add-Member -Name "SKU" -MemberType NoteProperty -Value $license.SKU
                     $objPlans | Add-Member -Name "Plan" -MemberType NoteProperty -Value $null
                     $objPlans | Export-Csv $plansFileName -NoTypeInformation -ErrorAction Stop
-                    Write-Log -LogLevel Error -UserOrGroup $groupName "Nenhum plano encontrado na SKU $($license.SKU)"
+                    Write-Log -LogLevel Error -UserOrGroup $groupName "No plan found for SKU $($license.SKU)"
                 }
                 catch{
                     Write-Log -LogLevel Error -UserOrGroup $license.SKU $_.Exception.Message
@@ -383,34 +402,34 @@ Function LicensePlansMonitor{
         }
 
         if(($comparePlans|Measure-Object).Count -gt 0){
-                Write-Log -LogLevel "Info" -UserOrGroup $license.SKU -Message "Alterações detectadas. Planos adicionados: $(($comparePlans|Where-Object{$_.SideIndicator -eq "=>"}|Measure-Object).Count) - Planos removidos: $(($comparePlans|Where-Object{$_.SideIndicator -eq "<="}|Measure-Object).Count)"
-
-                #Exporta uma lista contendo os planos que foram adicionados ou removidos do grupo
+                Write-Log -LogLevel "Info" -UserOrGroup $license.SKU -Message "Changes in license configuration file detected. Plans added: $(($comparePlans|Where-Object{$_.SideIndicator -eq "=>"}|Measure-Object).Count) - Plans removed: $(($comparePlans|Where-Object{$_.SideIndicator -eq "<="}|Measure-Object).Count)"
+                
+                #Exports a list with the plans that have been either added or removed from the license config file
                 try{
-                    $plansCompareFileName = "$($plansCompareFileSufix)_PlanosAdicionadosRemovidos_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
+                    $plansCompareFileName = "$($plansCompareFileSufix)_PlansAddedRemoved_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
                     $comparePlans | Where-Object{$_.Plan -ne ""} | Export-Csv $plansCompareFileName -NoTypeInformation -ErrorAction Stop
-                    Write-Log -LogLevel "Info" -UserOrGroup $groupName -Message "Lista de planos adicionados e removidos do grupo exportada com sucesso para o arquivo $($plansCompareFileName)"
+                    Write-Log -LogLevel "Info" -UserOrGroup $groupName -Message "Plan configuration change detected succesfully. List of plans exported into log file $($plansCompareFileName)"
                 }
                 catch{
                     Write-Log -LogLevel "Error" -UserOrGroup $license.SKU -Message $_.Exception.Message
                 }
-            
-                #Retorna a lista comparativa de planos
+                
+                #Increments the resultant array
                 $arrLicenseChangeResult += $comparePlans
         }
     }
 
-    #Retorna a lista de planos resultantes caso a coluna plan não esteja vazia 
+    #Returns the list of resultant plans in the case Plans column is not empty 
     return $arrLicenseChangeResult | Where-Object{$_.Plan -ne ""}
 }
 
-#Função que cria uma array com os planos separados por ; da coluna Plans do arquivo Licenses.csv
+#Function that creates an array with the plans separated by semi-comma 
 Function ListPlans{
     param(
         $Plans
     )
 
-    #Separa cada element por ; e cria uma array
+    #Split each element by semi-comma
     $arr = $Plans.Split(";")
     return $arr
 }
@@ -421,114 +440,119 @@ Function ManageLicense(){
         $SKU,
         $Plans
     )
-    Write-Log -LogLevel "Info" -UserOrGroup $Group -Message "Iniciando a tarefa de verificação de alterações de membros no grupo"
+    Write-Log -LogLevel "Info" -UserOrGroup $Group -Message "Starting group membership changes task"
     
-    #Verifica se ocorreu alguma mudança no arquivo de licenças
+    #Check if any change happens in the license config file
     $plansMonitorResult = LicensePlansMonitor -LicenseFile $licenseConfigFile -Group $Group
 
-    #Formata os planos para adicionar, remover e uma lista com todos os planos (para remover dos usuários que sairam do grupo)
-    #Se o objeto indicar que o plano foi adicionado => grava numa variavel separada
+    #Format plans to add and/or remove and a list with all plans included (in order to remove users that left the plan)
+    #If the eobject confirms that a plan has been included, adds '=>' in an exclusive variable
     if(($plansMonitorResult | Where-Object{$_.SideIndicator -eq "=>"}|Measure-Object).Count -gt 0){
         $plansToEnable = ListPlans -Plans ($plansMonitorResult | Where-Object{$_.SideIndicator -eq "=>"}).Plan
     }
-    #Se o objeto indicar que o plano foi removido <= grava numa variavel separada
+    #If the eobject confirms that a plan has been excluded, adds '=>' in an exclusive variable
     if(($plansMonitorResult | Where-Object{$_.SideIndicator -eq "<="}|Measure-Object).count -gt 0){
         $plansToDisable = ListPlans -Plans ($plansMonitorResult | Where-Object{$_.SideIndicator -eq "<="}).Plan
     }
-    #Grava uma variavel com todos os planos
+    #Creates an exclusive variable with all plans
     if(($plansMonitorResult|Measure-Object).Count -gt 0){
         $allPlans = ListPlans -Plans ($plansMonitorResult).Plan
     }
-                
-    #Se ocorreu alguma mudança na configuração de licenças, roda a nova configuração para todos do grupo. Se houve mudança no membership do grupo, remove todos os planos da configuração de quem saiu. Adiciona e remove os planos para quem esta no grupo
+    
+    #If any change happend in plans config, run the new configuration for all members of the group. If a change happend in group's membership, disables the license options of the given plan from those whom left the group. Add and remove plans for those whom is in the group
     if(($plansMonitorResult|Measure-Object).Count -gt 0){
 
-        #Lista a atividade de entrada e saida do grupo
+        #Creates a varibale with the group members ship activitiy
         $groupMembersChange = GroupMonitor -GroupName $Group
 
-        #Se a quantidade de mudanças no grupo for maior do que 0 roda as mudanças para os usuários que estão no grupo e remove as licenças adicionadas e removidas da configuração de quem saiu do grupo
+        #If the number of group changes is greater than 0, runs the changes for those users that are in the group and disable the license options of the given plan from those whom left the group
         if(($groupMembersChange|Measure-Object).Count -gt 0){
 
-            Write-Log -LogLevel Info -UserOrGroup $Group -Message "Iniciando tarefas de adição de licenças para $(($groupMembersChange|Where-Object{$_.SideIndicator -eq "=>"}|Measure-Object).Count) novos membros"
+            Write-Log -LogLevel Info -UserOrGroup $Group -Message "Start license adition task for $(($groupMembersChange|Where-Object{$_.SideIndicator -eq "=>"}|Measure-Object).Count) new members"
             Write-Log -LogLevel Info -UserOrGroup $Group -Message "SKU: $($SKU). Plano(s): $($Plans)"
 
-            #Obtem membros do grupo e salva um novo arquivo e roda o novo licenciamento para todos os mem
+            #Get group members and save in a new file and runs new licensing for all members
             try{
-                #Lista os membros atuais do grupo
+                #Get a list of current group membership
                 $currentMembers = Get-ADGroup -Identity $Group -Properties Members -ErrorAction Stop | Select-Object -ExpandProperty Members | Get-ADUser -ErrorAction Stop
-                Write-Log -LogLevel "Info" -UserOrGroup $Group "Membros do grupo listados com sucesso"
-                #Se a quantidade de membros encontrados for maior do que 0
+                Write-Log -LogLevel "Info" -UserOrGroup $Group "Group members listed successfully"
+                
+                #If the number of members found is greater than 0
                 if(($currentMembers|Measure-Object).Count -gt 0){
                     try{
-                        #Cria uma variável com o nome do arquivo de log
-                        $logFileName = "$($groupName)_Membros_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
+                        #Creates a variable with the name of the group membership log file
+                        $logFileName = "$($groupName)_Members_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
                         $currentMembers | Export-Csv "$($logFileName)" -NoTypeInformation -ErrorAction Stop
-                        Write-Log -LogLevel "Error" -UserOrGroup $Group "Membros do grupo salvos no arquivo csv $($logFileName)"
+                        Write-Log -LogLevel "Error" -UserOrGroup $Group "Group membership saved into log file $($logFileName)"
                         
-                        #Para cada usuário listado como membro do AD
+                        #For each user listed as an AD member
                         foreach($user in $currentMembers){
 
-                            #Verifica se o usuário não esta licenciado
+                            #Checks if the user is not licensed yet
                             If(-not (Get-MsolUser -UserPrincipalName $user.UserPrincipalName).IsLicensed -eq $true){
-                                Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Usuário não licenciado. SKU será adicionada"
+                                Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "User not licensed. SKU is going to be added"
                                 try{
-                                    #Se existe algum plano para habilitar
+                                    #If there is any plan to manage
                                     if(($plansToEnable|Measure-Object).count -gt 0){
-                                        #Adiciona a licença ao usuário
+                                        #Enables the license plan for the current user
                                         Add-MSOLUserLicense -Location BR -Users $user.UserPrincipalName -SKU $SKU -PlansToEnable $plansToEnable -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                        Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) adicionada ao usuário com os planos $($plansToEnable) habilitados"
+                                        Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) added to user with the following plans enabled: $($plansToEnable)"
                                     }
-                                    #Se existe algum plano para desabilitar
+                                    #If there is any plan to disable
                                     if(($plansToDisable|Measure-Object).count -gt 0){
-                                        #Adiciona a licença ao usuário
+                                        #Disables the license plan for the current user
                                         Add-MSOLUserLicense -Location BR -Users $user.UserPrincipalName -SKU $SKU -PlansToDisable $plansToDisable -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                        Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) adicionada ao usuário com os planos $($plansToDisable) removidos"
+                                        Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) added to user with the follwoing plans disabled: $($plansToDisable)"
                                     }
                                 }
                                 catch{
-                                    #Grava o erro no log
+                                    #Writes the error related to plans changes to the log
                                     Write-Log -LogLevel "Error" -UserOrGroup $user.UserPrincipalName -Message $_.Exception.Message
                                 }
                             }
-                            #Se o usuário já foi licenciado
+                            #If the user is already licensed
                             else{
-                                #Verifica se o usuário não contém o SKU ID atual
+                                #Checks if the user has the current SKU ID already (passed as $SKU parameter into this current function)
                                 If(-not((Get-MsolUser -UserPrincipalName $user.UserPrincipalName).Licenses.AccountSkuId|Where-Object{$_ -eq $SKU})){
-                                    Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Usuário já possui SKU $($SKU). Planos serão editados"
+                                    Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "User already has SKU $($SKU). Plans going to be edited"
                                     try{
-                                        #Se existe algum plano para habilitar
+                                        #If there is any plan to enable
                                         if(($plansToEnable|Measure-Object).count -gt 0){
-                                            #Adiciona a licença ao usuário
+                                            #Enables the license plan for the current user
                                             Add-MSOLUserLicense -Location BR -Users $user.UserPrincipalName -SKU $SKU -PlansToEnable $plansToEnable -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Planos habilitados para o usuário: $($plansToEnable)"
+                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Plans enabled for the user: $($plansToEnable)"
                                         }
-                                        #Se existe algum plano para desabilitar
+                                        #If there is any plan to disable
                                         if(($plansToDisable|Measure-Object).count -gt 0){
-                                            #Adiciona a licença ao usuário
+                                            #Disables the license plan for the current user
                                             Add-MSOLUserLicense -Location BR -Users $user.UserPrincipalName -SKU $SKU -PlansToDisable $plansToDisable -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Planos removidos para o usuário: $($plansToDisable)"
+                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Plans disabled for the user: $($plansToDisable)"
                                         }                            
                                     }
                                     catch{
-                                        #Grava o erro no log
+                                        #Writes the error related to plans changes to the log
                                         Write-Log -LogLevel "Error" -UserOrGroup $user.UserPrincipalName -Message $_.Exception.Message
                                     }
                                 }
-                                #Se o usuário foi licenciado e já tem o SKU ID, atualiza os planos
+                                #If the user has been already licensed and also has the current SKU (passed as $SKU parameter into this current function)
                                 else{
                                     try{
+                                        #If there is any plan to manage
                                         if(($plansToEnable|Measure-Object).count -gt 0){
+                                            #Updates the license plan to add new plan configuration for the current user
                                             Update-MSOLUserLicensePlan -Users $user.UserPrincipalName -SKU $SKU -PlansToEnable $plansToEnable -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Planos adicionados para o usuário: $($plansToEnable)"
+                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Plans added to the user: $($plansToEnable)"
                                         }
+                                        #If there is any plan to disable
                                         if(($plansToDisable|Measure-Object).count -gt 0){
+                                            #Updates the license plan to remove new plan configuration for the current user
                                             Update-MSOLUserLicensePlan -Users $user.UserPrincipalName -SKU $SKU -PlansToDisable $plansToDisable -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Planos removidos para o usuário: $($plansToDisable)"
+                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Plans disabled for the user: $($plansToDisable)"
                                         }
 
                                     }
                                     catch{
-                                        #Grava o erro no log
+                                        #Writes the error related to plans changes to the log
                                         Write-Log -LogLevel "Error" -UserOrGroup $user.UserPrincipalName -Message $_.Exception.Message
                                     }
                                 }
@@ -536,124 +560,130 @@ Function ManageLicense(){
                         }
                     }
                     catch{
+                        #Writes the error related to export current members
                         Write-Log -LogLevel "Error" -UserOrGroup $Group $_.Exception.Message
                     }
                 }
+                #If the number of members found is 0
                 else{
-                    Write-Log -LogLevel "Error" -UserOrGroup $Group "Nenhum membro encontrado no grupo"
+                    Write-Log -LogLevel "Error" -UserOrGroup $Group "No member found in the group. No license management will run for this group"
                 }
             }
             catch{
+                #Writes the error related to get AD user objects
                 Write-Log -LogLevel "Error" -UserOrGroup $groupName $_.Exception.Message
             }
             
-            Write-Log -LogLevel "Info" -UserOrGroup $Group -Message "Iniciando tarefas de remoção de licenças para $(($groupMembersChange|Where-Object{$_.SideIndicator -eq "<="}|Measure-Object).Count) membros removidos"
+            Write-Log -LogLevel "Info" -UserOrGroup $Group -Message "Start license removal task for $(($groupMembersChange|Where-Object{$_.SideIndicator -eq "<="}|Measure-Object).Count) removed members"
             
-            #Se algum usuário foi removido do grupo
+            #If any user has been removed from the group
             if(($groupMembersChange | Where-Object{$_.SideIndicator -eq "<="} | Measure-Object).Count -gt 0){
 
-                Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "$(($groupMembersChange | Where-Object{$_.SideIndicator -eq "<="} | Measure-Object).Count) usuários foram removidos do grupo"
+                Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "$(($groupMembersChange | Where-Object{$_.SideIndicator -eq "<="} | Measure-Object).Count) users have been removed from the group"
 
-                #Para cada usuário que saiu do grupo, remove os planos adicionados e removidos após a edição da configuração de licenças
+                #For each user whom left the group, remove the plans alls plans form last license config file edition
                 foreach($user in $groupMembersChange | Where-Object{$_.SideIndicator -eq "<="}){
                     
-                    Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Ö usuário $($user) foi removido do grupo. Os planos do grupo serão removidos para o usuário"
+                    Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "User has been removed from the group. The plans will be disabled for this user"
 
                     try{
-                        #Remove a plano do usuário
+                        #Remove the plan from the user
                         Update-MSOLUserLicensePlan -Users $user.UserPrincipalName -SKU $SKU -PlansToDisable $allPlans -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                        Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Planos removidos para o usuário: $($plansToDisable)"
+                        Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Plans disabled for the user: $($plansToDisable)"
                     }
                     catch{
-                        #Grava o erro no log
+                        #Writes the error related to license management
                         Write-Log -LogLevel "Error" -UserOrGroup $user.UserPrincipalName -Message $_.Exception.Message
                     }
                 }
             }
-            #Se nenhum usuário removido do grupo for encontrado
+            #If no user has been removed from group
             else{
-                Write-Log -LogLevel Error -UserOrGroup $Group -Message "Nenhum usuário removido do grupo para remover licença"
+                Write-Log -LogLevel Error -UserOrGroup $Group -Message "No user has been removed. No license removal will run for this group"
             }
         }
-        #Se a quantidade de mudanças do grupo for igual a 0 inicia a edição de licenças em todos os usuários do grupo devido à mudança no arquivo de configuração
+        #If the number of changes in group membership is equal to 0 starts the license management on all users due to change in license config file
         else {
-            Write-Log -LogLevel "Info" -UserOrGroup $Group -Message "Nenhum membro foi adicionado ou removido do grupo"
-            Write-Log -LogLevel "Info" -UserOrGroup $Group -Message "Iniciando a listagem de membros do grupo"
+            Write-Log -LogLevel "Info" -UserOrGroup $Group -Message "NO member added or removed on this group. No license management wil run for this group"
+            Write-Log -LogLevel "Info" -UserOrGroup $Group -Message "Starting group membership listing"
             
-            #Obtem membros do grupo e salva um novo arquivo
             try{
                 $currentMembers = Get-ADGroup -Identity $Group -Properties Members -ErrorAction Stop | Select-Object -ExpandProperty Members | Get-ADUser -ErrorAction Stop
-                Write-Log -LogLevel "Info" -UserOrGroup $Group "Membros do grupo listados com sucesso"
+                Write-Log -LogLevel "Info" -UserOrGroup $Group "Members listed successfully"
+                #If current membership count is greater than 0
                 if(($currentMembers|Measure-Object).Count -gt 0){
+                    #Creates a variable with the name of the group membership log file
                     try{
-                        $logFileName =  "$($groupName)_Membros_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
+                        $logFileName =  "$($groupName)_Members_$((Get-Date).ToString('ddMMyyyy_hhmmss')).csv"
                         $currentMembers | Export-Csv "$($logFIleName)" -NoTypeInformation -ErrorAction Stop
-                        Write-Log -LogLevel "Error" -UserOrGroup $Group "Membros do grupo salvos no arquivo csv $($logFileName)"
+                        Write-Log -LogLevel "Error" -UserOrGroup $Group "Group membership exported into log file $($logFileName)"
 
                         foreach($user in $currentMembers){
 
-                            #Verifica se o usuário não esta licenciado
+                           #Checks if the user is not licensed yet
                             If(-not (Get-MsolUser -UserPrincipalName $user.UserPrincipalName).IsLicensed -eq $true){
-                                Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Usuário não licenciado. SKU será adicionada"
+                                Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "User is not licensed. SKU is going to be added for this user"
                                 try{
-                                    #Se existe algum plano para habilitar
+                                    #If there is a plan to enable                           
                                     if(($plansToEnable|Measure-Object).count -gt 0){
-                                        #Adiciona a licença ao usuário
+                                        #Enables the license plan for the current user
                                         Add-MSOLUserLicense -Location BR -Users $user.UserPrincipalName -SKU $SKU -PlansToEnable $plansToEnable -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                        Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) adicionada ao usuário com os planos $($plansToEnable) habilitados"
+                                        Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) added with the following plans enabled $($plansToEnable)"
                                     }
-                                    #Se existe algum plano para desabilitar
+                                    #If there is a plan to disable    
                                     if(($plansToDisable|Measure-Object).count -gt 0){
-                                        #Adiciona a licença ao usuário
+                                        #Disables the license plan for the current user
                                         Add-MSOLUserLicense -Location BR -Users $user.UserPrincipalName -SKU $SKU -PlansToDisable $plansToDisable -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                        Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) adicionada ao usuário com os planos $($plansToDisable) removidos"
+                                        Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) added with the following plans removed: $($plansToDisable)"
                                     }
                                 }
                                 catch{
-                                    #Grava o erro no log
+                                   #Writes the error related to plans changes to the log
                                     Write-Log -LogLevel "Error" -UserOrGroup $user.UserPrincipalName -Message $_.Exception.Message
                                 }
                             }
-                            #Se o usuário já foi licenciado
+                           #If the user has been already licensed
                             else{
-                                #Verifica se o usuário não contém o SKU ID atual
+                                 #Checks if the user has the current SKU ID already (passed as $SKU parameter into this current function)
                                 If(-not((Get-MsolUser -UserPrincipalName $user.UserPrincipalName).Licenses.AccountSkuId|Where-Object{$_ -eq $SKU})){
-                                    Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Usuário não possui SKU $($SKU). SKU será adicionadao e os planos serão editados"
+                                    Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "User is not licensed SKU $($SKU). SKU is going to be added for this user and plans will be edited"
                                     try{
-                                        #Se existe algum plano para habilitar
+                                        #If there is a plan to enable
                                         if(($plansToEnable|Measure-Object).count -gt 0){
-                                            #Adiciona a licença ao usuário
+                                            #Enables the license plan for the current user
                                             Add-MSOLUserLicense -Location BR -Users $user.UserPrincipalName -SKU $SKU -PlansToEnable $plansToEnable -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) adicionada ao usuário com os planos $($plansToEnable) habilitados"
+                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) added with the following plans enabled: $($plansToEnable)"
                                         }
-                                        #Se existe algum plano para desabilitar
+                                        #If there is a plan to disable
                                         if(($plansToDisable|Measure-Object).count -gt 0){
-                                            #Adiciona a licença ao usuário
+                                            #Disables the license plan for the current user
                                             Add-MSOLUserLicense -Location BR -Users $user.UserPrincipalName -SKU $SKU -PlansToDisable $plansToDisable -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) adicionada ao usuário com os planos $($plansToDisable) removidos"
+                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) added with the following plans disabled $($plansToDisable)"
                                         }                            }
                                     catch{
-                                        #Grava o erro no log
+                                        #Writes the error related to plans changes to the log
                                         Write-Log -LogLevel "Error" -UserOrGroup $user.UserPrincipalName -Message $_.Exception.Message
                                     }
                                 }
-                                #Se o usuário foi licenciado e já tem o SKU ID, atualiza os planos
+                                #If the user has been already licensed and also has the current SKU (passed as $SKU parameter into this current function)
                                 else{
                                     try{
-                                        #Se a quantidade de planos para habilitar for maior do que 0
+                                       #If there is a plan to enable
                                         if(($plansToEnable|Measure-Object).count -gt 0){
+                                            #Updates the license plan to add new plan configuration for the current user
                                             Update-MSOLUserLicensePlan -Users $user.UserPrincipalName -SKU $SKU -PlansToEnable $plansToEnable -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Planos removidos para o usuário: $($plansToDisable)"
+                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Plans removed for the user: $($plansToDisable)"
                                         }
-                                        #Se a quantidade de planos para desabilitar for maior do que 0
+                                        #If there is a plan to disable
                                         if(($plansToDisable|Measure-Object).count -gt 0){
+                                            #Updates the license plan to add new plan configuration for the current user
                                             Update-MSOLUserLicensePlan -Users $user.UserPrincipalName -SKU $SKU -PlansToDisable $plansToDisable -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Planos removidos para o usuário: $($plansToDisable)"
+                                            Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Plans removed for the user: $($plansToDisable)"
                                         }
 
                                     }
                                     catch{
-                                        #Grava o erro no log
+                                        #Writes the error related to plans changes to the log
                                         Write-Log -LogLevel "Error" -UserOrGroup $user.UserPrincipalName -Message $_.Exception.Message
                                     }
                                 }
@@ -661,140 +691,146 @@ Function ManageLicense(){
                         }
                     }
                     catch{
+                        #Writes the error related to export current members
                         Write-Log -LogLevel "Error" -UserOrGroup $Group $_.Exception.Message
                     }
                 }
                 else{
-                    Write-Log -LogLevel "Error" -UserOrGroup $Group "Nenhum membro encontrado no grupo"
+                    #If the number of members found is 0
+                    Write-Log -LogLevel "Error" -UserOrGroup $Group "No group member found"
                 }
             }
             catch{
+                #Writes the error related to get AD user objects
                 Write-Log -LogLevel "Error" -UserOrGroup $groupName $_.Exception.Message
             }
         }
     }
-    #Se não ocorreu nenhuma mudança no arquivo de configuração de licenças, executa apenas para usuários que foram adicionados ou removidos dos grupos
+    #If no changes has been detected in license configuration file, runs license management only for those users that have been either added or removed from the group    
     else{
-        #Lista a atividade de entrada e saida do grupo
+        #Creates a varibale with membership changes
         $groupMembersChange = GroupMonitor -GroupName $Group
 
-        #Se a quantidade de mudanças no grupo for maior do que 0
+        #If the number of changes in group membership is greater than 0
         if(($groupMembersChange|Measure-Object).Count -gt 0){
 
-            Write-Log -LogLevel Info -UserOrGroup $Group -Message "Iniciando tarefas de adição de licenças para $(($groupMembersChange|Where-Object{$_.SideIndicator -eq "=>"}|Measure-Object).Count) novos membros"
-            Write-Log -LogLevel Info -UserOrGroup $Group -Message "SKU: $($SKU). Plano(s): $($Plans)"
+            Write-Log -LogLevel Info -UserOrGroup $Group -Message "Starting license adition task for $(($groupMembersChange|Where-Object{$_.SideIndicator -eq "=>"}|Measure-Object).Count) new members"
+            Write-Log -LogLevel Info -UserOrGroup $Group -Message "SKU: $($SKU). Plan(s): $($Plans)"
             
-            #Cria a array de planos
+            #Creates an array with all plans            
             $Plans = ListPlans -Plans $Plans
 
-            #Se algum usuário foi adicionado no grupo
+            #If any user has been added to the group
             if(($groupMembersChange | Where-Object{$_.SideIndicator -eq "=>"} | Measure-Object).Count -gt 0){
                 
-                Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "$(($groupMembersChange | Where-Object{$_.SideIndicator -eq "=>"} | Measure-Object).Count) usuários foram removidos do grupo"
+                Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "$(($groupMembersChange | Where-Object{$_.SideIndicator -eq "=>"} | Measure-Object).Count) users have been removed from the group"
 
-                #Para cada usuário que entrou no grupo, adiciona a licença correspondente
+                #For each user added to the group, adds the license
                 foreach($user in $groupMembersChange | Where-Object{$_.SideIndicator -eq "=>"}){
                     
-                    Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "O usuário $($user) foi removido do grupo. Os planos do grupo serão removidos para o usuário"
+                    Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "User $($user) has been removed from the group. Plans are going to be removed for this user"
 
-                    #Verifica se o usuário não esta licenciado
+
+                   #Checks if the user is not licensed yet
                     If(-not (Get-MsolUser -UserPrincipalName $user.UserPrincipalName).IsLicensed -eq $true){
-                        Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "Usuário não licenciado. SKU será adicionada"
+                        Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "User not licensed. SKU is going to be added"
                         try{
-                            #Se existe algum plano para habilitar
+                            #If there is a plan to enable
                             if(($Plans|Measure-Object).count -gt 0){
-                                #Adiciona a licença ao usuário
+                                #Enables the license plan for the current user
                                 Add-MSOLUserLicense -Location BR -Users $user.UserPrincipalName -SKU $SKU -PlansToEnable $Plans -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) adicionada ao usuário com os planos habilitados: $($plansToEnable)"
+                                Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) added with the following plans enabled: $($plansToEnable)"
                             }
                         }
                         catch{
-                            #Grava o erro no log
+                            #Writes the error related to plans changes to the log
                             Write-Log -LogLevel "Error" -UserOrGroup $user.UserPrincipalName -Message $_.Exception.Message
                         }
                     }
-                    #Se o usuário já foi licenciado
+                    #If the user has been already licensed
                     else{
-                        #Verifica se o usuário não contém o SKU ID atual
+                        #Checks if the user has the current SKU ID already (passed as $SKU parameter into this current function)
                         If(-not((Get-MsolUser -UserPrincipalName $user.UserPrincipalName).Licenses.AccountSkuId|Where-Object{$_ -eq $SKU})){
                             try{
-                                #Se existe algum plano para habilitar
+                                #If there is a plan to enable
                                 if(($Plans|Measure-Object).count -gt 0){
-                                    #Adiciona a licença ao usuário
+                                    #Enables the license plan for the current user
                                     Add-MSOLUserLicense -Location BR -Users $user.UserPrincipalName -SKU $SKU -PlansToEnable $Plans -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                    Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) adicionada ao usuário com os planos habilitados: $($plansToEnable)"
+                                    Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) added with the following plans disabled: $($plansToEnable)"
                                 }                         
                             }
                             catch{
-                                #Grava o erro no log
+                                #Writes the error related to plans changes to the log
                                 Write-Log -LogLevel "Error" -UserOrGroup $user.UserPrincipalName -Message $_.Exception.Message
                             }
                         }
-                        #Se o usuário foi licenciado e já tem o SKU ID, atualiza os planos
+                        #If the user has been licensed and has the current SKU ID already (passed as $SKU parameter into this current function)
                         else{
                             try{
+                                #If there is a plan to enable
                                 if(($Plans|Measure-Object).count -gt 0){
+                                    #Enables the license plan for the current user
                                     Update-MSOLUserLicensePlan -Users $user.UserPrincipalName -SKU $SKU -PlansToEnable $Plans -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                                    Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) adicionada ao usuário com os planos habilitados: $($plansToEnable)"
+                                    Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) added with the following plans enabled: $($plansToEnable)"
                                 }
 
                             }
                             catch{
-                                #Grava o erro no log
+                                #Writes the error related to plans changes to the log
                                 Write-Log -LogLevel "Error" -UserOrGroup $user.UserPrincipalName -Message $_.Exception.Message
                             }
                         }
                     }
                 }
             }
-            #Se nenhum usuário adicionado ao grupo for encontrado
+           #If no user has been added to the user
             else{
-                Write-Log -LogLevel Error -UserOrGroup $Group -Message "Nenhum usuário adicionado ao grupo para receber licença"
+                Write-Log -LogLevel Error -UserOrGroup $Group -Message "No user added to the group to receive a license"
             }
             
-            Write-Log -LogLevel "Info" -UserOrGroup $Group -Message "Iniciando tarefas de remoção de licenças para $(($groupMembersChange|Where-Object{$_.SideIndicator -eq "<="}|Measure-Object).Count) membros removidos"
+            Write-Log -LogLevel "Info" -UserOrGroup $Group -Message "Starting license removal task for $(($groupMembersChange|Where-Object{$_.SideIndicator -eq "<="}|Measure-Object).Count) members removed"
             
-            #Se algum usuário foi removido do grupo
+            #If any user has been removed from the group
             if(($groupMembersChange | Where-Object{$_.SideIndicator -eq "<="} | Measure-Object).Count -gt 0){
 
-                #Para cada usuário que saiu do grupo, remove a licença correspondente
+                #for each user whom left the group, remove the license
                 foreach($user in $groupMembersChange | Where-Object{$_.SideIndicator -eq "<="}){
 
                     try{
-                        #Remove a plano do usuário
+                        #Disables the license plan for the current user
                         Update-MSOLUserLicensePlan -Users $user.UserPrincipalName -SKU $SKU -PlansToDisable $Plans -LogFile .\$licenseModuleLogFileName -ErrorAction Stop
-                        Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) adicionada ao usuário com os planos removidos: $($plansToEnable)"
+                        Write-Log -LogLevel Info -UserOrGroup $user.UserPrincipalName -Message "SKU $($SKU) added with the following plans disabled: $($plansToEnable)"
                     }
                     catch{
-                        #Grava o erro no log
+                        #Writes the error related to plans changes to the log
                         Write-Log -LogLevel "Error" -UserOrGroup $user.UserPrincipalName -Message $_.Exception.Message
                     }
                 }
             }
-            #Se nenhum usuário removido do grupo for encontrado
+            #If no user has been removed from group
             else{
-                Write-Log -LogLevel Error -UserOrGroup $Group -Message "Nenhum usuário removido do grupo para remover licença"
+                Write-Log -LogLevel Error -UserOrGroup $Group -Message "No user has been removed from the group to remove a license"
             }
         }
-        #Se a quantidade de mudanças no grupo for igual a 0
+        #If the number of changes in group membership is 0
         else
         {
-            Write-Log -LogLevel "Info" -UserOrGroup $Group -Message "Nenhum membro foi adicionado ou removido do grupo"
+            Write-Log -LogLevel "Info" -UserOrGroup $Group -Message "No group added or removed from the group"
         }
     }
 }
 
-#Tenta efetuar a conexão no Microsoft Online Services
+#Try to connect to Microsoft Online Services
 ConnectMsolService
 
-#Para cada uma das configurações de licenciamento
+#For each configuration listed in license config file
 foreach($license in $licenseConfigFile){
-        #Executa a função de gerenciamento de licenças
+        #Runs the function to manage licenses        
         ManageLicense -Group $license.Group -SKU $license.SKU -Plans $license.Plans
 }
 
-#Finaliza o timer para calculo do tempo de execucão
+#Get current date/time to stop measure the duration of execution
 $stopTimer = Get-Date
 
-#Registra o termino do script com o tempo de execução
-Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "############ Script Finalizado. Tempo de execução: $((New-TimeSpan -Start $startTimer -End $stopTimer).ToString("dd\.hh\:mm\:ss")) ############"
+#Log the start of script execution
+Write-Log -LogLevel Info -UserOrGroup "SCRIPT" -Message "############ Script Finished. Execution Time: $((New-TimeSpan -Start $startTimer -End $stopTimer).ToString("dd\.hh\:mm\:ss")) ############"
